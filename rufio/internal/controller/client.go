@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -18,7 +20,8 @@ import (
 type ClientFunc func(ctx context.Context, log logr.Logger, hostIP, username, password string, opts *BMCOptions) (*bmclib.Client, error)
 
 // NewClientFunc returns a new BMCClientFactoryFunc. The timeout parameter determines the
-// maximum time to probe for compatible interfaces.
+// maximum time to probe for compatible interfaces and is also used as the HTTP client timeout
+// for BMC operations like virtual media mounting.
 func NewClientFunc(timeout time.Duration) ClientFunc {
 	// Initializes a bmclib client based on input host and credentials
 	// Establishes a connection with the bmc with client.Open
@@ -30,6 +33,20 @@ func NewClientFunc(timeout time.Duration) ClientFunc {
 		}
 		log = log.WithValues("host", hostIP, "username", username)
 		o = append(o, bmclib.WithLogger(log))
+
+		// Create HTTP client with custom timeout for BMC operations.
+		// This is especially important for virtual media operations which may take
+		// longer when the BMC needs to download/verify ISO images.
+		httpClient := &http.Client{
+			Timeout: timeout,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec // BMCs often use self-signed certs
+				},
+			},
+		}
+		o = append(o, bmclib.WithRedfishHTTPClient(httpClient))
+
 		client := bmclib.NewClient(hostIP, username, password, o...)
 
 		ctx, cancel := context.WithTimeout(ctx, timeout)
